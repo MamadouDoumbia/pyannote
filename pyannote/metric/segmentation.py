@@ -21,11 +21,20 @@
 
 from base import BaseMetric
 from pyannote.base.annotation import Annotation
+import numpy as numpy
+
+# pour regarder delta !
+# from matplotlib import pyplot as plt
+
 
 PTY_NAME = 'segmentation purity'
 CVG_NAME = 'segmentation coverage'
 TOTAL = 'total'
 INTER = 'intersection' 
+""" Mamadou"""
+MMU_NAME = 'segmentation precision'
+MMUR_NAME = 'segmentation recall'
+#PCS_NAME = 'segemntation precision'
 
 class SegmentationCoverage(BaseMetric):
     """Segmentation coverage
@@ -136,6 +145,129 @@ class SegmentationPurity(SegmentationCoverage):
         return super(SegmentationPurity, self)._get_details(
             hypothesis, reference, **kwargs
         )
+
+
+
+
+
+""" Mamadou Code """
+class SegmentationPrecision(BaseMetric):
+    
+    @classmethod
+    def metric_name(cls):
+        return MMU_NAME
+
+    @classmethod
+    def metric_components(cls):
+        return ['Positif', 'Total']
+
+    def __init__(self, tolerance=10., **kwargs):
+
+        super(SegmentationPrecision, self).__init__()
+        self.tolerance = tolerance
+
+    def _get_details(self, reference, hypothesis, **kwargs):  
+
+        if isinstance(reference, Annotation):
+            #Fin_scene_ref = [segment.end for segment in reference]
+            #Fin_scene_ref = Fin_scene_ref[:-1]
+            # Fin des Scènes reference
+            reference = reference.get_timeline()
+            
+
+            
+
+        if isinstance(hypothesis, Annotation):
+            #Fin_scene_hyp = [segment.end for segment in hypothesis]
+            #Fin_scene_hyp = Fin_scene_hyp[:-1]
+            # Fin des Scènes  hypothesis
+            hypothesis = hypothesis.get_timeline()
+            
+                        
+
+        detail = self._init_details()    
+
+
+        """"""""""""""" Code """""""""""""""
+
+       
+
+        Positif = 0.
+
+        N = len(reference) - 1
+        M = len(hypothesis) - 1
+        NN = [segment.end for segment in reference][:-1]
+        MM = [segment.end for segment in hypothesis][:-1]
+        delta = numpy.zeros((N, M))
+        for i in NN:
+            for j in MM:
+              
+                delta[NN.index(i), MM.index(j)] = abs(i-j) 
+                
+        delta_max = numpy.amax(delta)        
+        delta[numpy.where(delta > self.tolerance)] = numpy.inf
+        # print delta
+
+   
+
+        """ delta[1] = difference entre le2ième elt de ref et
+        tous les elts de hyp donc 2ième ligne de delta !"""
+        
+        "La valeur min de la matrice"
+        h=numpy.amin(delta)
+
+        while h< delta_max:
+       
+            "arg de la val_min"
+            k = numpy.argmin(delta)
+            i = k / M
+            j = k % M
+            delta[i, :] = numpy.inf
+            delta[:, j] = numpy.inf
+            Positif += 1
+            h = numpy.amin(delta)
+
+
+
+        detail['Positif'] = Positif
+        detail['Total'] = len(MM)             # Le nmbre d'elt ds Hyp, excepter le 1er et le dernier !
+        # detail['Total'] = len(hypothesis)-1 # dans ce cas on compte que le nmbre de ligne de Hyp
+
+        
+        return detail
+
+    def _get_rate(self, detail): 
+    
+        return detail['Positif'] / detail['Total']
+
+    def _pretty(self, detail):
+        string = ""
+        string += "  - Detect: %.2f seconds\n" % (detail[Positif])
+        string += "  - correct: %.2f seconds\n" % (detail[Totalr])
+        string += "  - %s: %.2f %%\n" % (self.name, 100*detail[self.name])
+        return string
+
+
+class SegmentationRecall(SegmentationPrecision):
+    
+
+
+    @classmethod
+    def metric_name(cls):
+        return MMUR_NAME
+
+
+
+
+       
+    def _get_details(self, reference, hypothesis,  **kwargs):
+        return super(SegmentationRecall, self)._get_details(hypothesis, reference)
+
+
+
+
+
+
 
 
 if __name__ == "__main__":
