@@ -107,7 +107,23 @@ class SlidingWindowsSegmentation(object):
             )
             middle = .5*(left.end + right.start)
 
+
             yield middle, self.diff(left, right, feature)
+
+    def iterdiff_STG(self, feature, subsegments, thresold_time):
+
+        # Thresold_time : seuil sur temps
+        mat_dissimilarity = np.zeros((len(subsegments), len(subsegments)))
+
+        for l, left in enumerate(subsegments):
+            for r, right in enumerate(subsegments):
+                if (left ^ right).duration < thresold_time:
+                    #print left, right
+                    mat_dissimilarity[l, r] = self.diff(left, right, feature)
+                else:
+                    mat_dissimilarity[l, r] = np.inf
+        return mat_dissimilarity
+        # return middle, mat_dissimilarity
 
     def apply(self, feature):
 
@@ -122,6 +138,43 @@ class SlidingWindowsSegmentation(object):
         x = x[maxima]
         y = y[maxima]
 
+        # only keep high enough local maxima
+        high_maxima = np.where(y > self.threshold)
+
+        # create list of segment boundaries
+        # do not forget very first and last boundaries
+        extent = feature.getExtent()
+        boundaries = itertools.chain(
+            [extent.start], x[high_maxima], [extent.end]
+        )
+
+        # create list of segments from boundaries
+        segments = [Segment(*p) for p in pairwise(boundaries)]
+
+        # TODO: find a way to set 'uri'
+        return Timeline(segments=segments, uri=None)
+
+    def get_maxima(self, feature):
+        x, y = zip(*[
+            (m, d) for m, d in self.iterdiff(feature)
+        ])
+        x = np.array(x)
+        y = np.array(y)
+        # find local maxima
+        maxima = scipy.signal.argrelmax(y)
+        x = x[maxima]
+        y = y[maxima]
+        return x, y
+
+    def get_maximaSTG(self, feature):
+        focus = feature.getExtent()
+        x = []
+        y = []
+        x = self.iterdiff_STG(feature)
+        return x, y
+
+    def apply_threshold(self, feature, x, y):
+        
         # only keep high enough local maxima
         high_maxima = np.where(y > self.threshold)
 
