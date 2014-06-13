@@ -21,15 +21,15 @@
 
 from base import BaseMetric
 from pyannote.base.annotation import Annotation
-import numpy as numpy
+import numpy as np
 
 PTY_NAME = 'segmentation purity'
 CVG_NAME = 'segmentation coverage'
 TOTAL = 'total'
 INTER = 'intersection'
-# """ Mamadou"""
-MMU_NAME = 'segmentation precision'
-MMUR_NAME = 'segmentation recall'
+# # """ Mamadou"""
+PRECISION_NAME = 'segmentation precision'
+RECALL_NAME = 'segmentation recall'
 
 
 class SegmentationCoverage(BaseMetric):
@@ -142,11 +142,11 @@ class SegmentationPurity(SegmentationCoverage):
 class SegmentationPrecision(BaseMetric):
     @classmethod
     def metric_name(cls):
-        return MMU_NAME
+        return PRECISION_NAME
 
     @classmethod
     def metric_components(cls):
-        return ['Positif', 'Total']
+        return ['Matches', 'Total']
 
     def __init__(self, tolerance=10., **kwargs):
 
@@ -159,42 +159,42 @@ class SegmentationPrecision(BaseMetric):
         if isinstance(hypothesis, Annotation):
             hypothesis = hypothesis.get_timeline()
         detail = self._init_details()
-        Positif = 0.
+        nMatches = 0.
 
         N = len(reference) - 1
         M = len(hypothesis) - 1
-        NN = [segment.end for segment in reference][:-1]
-        MM = [segment.end for segment in hypothesis][:-1]
-        delta = numpy.zeros((N, M))
-        for i in NN:
-            for j in MM:
-                delta[NN.index(i), MM.index(j)] = abs(i - j)
-        delta_max = numpy.amax(delta)
-        delta[numpy.where(delta > self.tolerance)] = numpy.inf
+        refBoundaries = [segment.end for segment in reference][:-1]
+        hypBoundaries = [segment.end for segment in hypothesis][:-1]
+        delta = np.zeros((N, M))
+        for r, refBoundary in enumerate(refBoundaries):
+            for h, hypBoundary in enumerate(hypBoundaries):
+                delta[r, h] = abs(refBoundary - hypBoundary)
+        delta_max = np.amax(delta)
+        delta[np.where(delta > self.tolerance)] = np.inf
         # print delta
-        h = numpy.amin(delta)
+        h = np.amin(delta)
 
         while h < delta_max:
-            k = numpy.argmin(delta)
+            k = np.argmin(delta)
             i = k / M
             j = k % M
-            delta[i, :] = numpy.inf
-            delta[:, j] = numpy.inf
-            Positif += 1
-            h = numpy.amin(delta)
-        detail['Positif'] = Positif
-        detail['Total'] = len(MM)
+            delta[i, :] = np.inf
+            delta[:, j] = np.inf
+            nMatches += 1
+            h = np.amin(delta)
+        detail['Matches'] = nMatches
+        detail['Total'] = len(hypBoundaries)
         return detail
 
     def _get_rate(self, detail):
-        return detail['Positif'] / detail['Total']
+        return detail['Matches'] / detail['Total']
 
 
 class SegmentationRecall(SegmentationPrecision):
 
     @classmethod
     def metric_name(cls):
-        return MMUR_NAME
+        return RECALL_NAME
 
     def _get_details(self, reference, hypothesis, **kwargs):
         return super(SegmentationRecall, self)._get_details(hypothesis, reference)
