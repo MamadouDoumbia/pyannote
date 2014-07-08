@@ -22,11 +22,14 @@ import itertools
 
 import numpy as np
 import scipy.signal
-
+import scipy
+from scipy.misc import logsumexp
+import sklearn
 from pyannote import Timeline
 from pyannote.base.segment import Segment, SlidingWindow
 from pyannote.stats.gaussian import Gaussian
 from sklearn.mixture import GMM
+import networkx as nx
 
 
 def pairwise(iterable):
@@ -108,7 +111,6 @@ class SlidingWindowsSegmentation(object):
             )
             middle = .5*(left.end + right.start)
 
-
             yield middle, self.diff(left, right, feature)
 
     def iterdiff_STG(self, feature, subsegments, thresold_time):
@@ -168,14 +170,13 @@ class SlidingWindowsSegmentation(object):
         return x, y
 
     def get_maximaSTG(self, feature):
-        focus = feature.getExtent()
         x = []
         y = []
         x = self.iterdiff_STG(feature)
         return x, y
 
     def apply_threshold(self, feature, x, y):
-        
+
         # only keep high enough local maxima
         high_maxima = np.where(y > self.threshold)
 
@@ -222,14 +223,109 @@ class SegmentationGaussianDivergence(SlidingWindowsSegmentation):
         return divergence
 
 
-class SegmentationThematique(SlidingWindowsSegmentation):
+class TransitionGraphSegmentation(object):
+
+    def __init__(
+        self, duration=15., similarity_th=5., temporal_th=120
+    ):
+        super(TransitionGraphSegmentation, self).__init__()
+        self.duration = duration
+        self.similarity_th = similarity_th
+        self.temporal_th = temporal_th
+
+    def diff(self, left, right, feature):
+
+        gl = Gaussian(covariance_type='diag')
+        Xl = feature.crop(left)
+        gl.fit(Xl)
+
+        gr = Gaussian(covariance_type='diag')
+        Xr = feature.crop(right)
+        gr.fit(Xr)
+
+        try:
+            divergence = gl.divergence(gr)
+        except:
+            divergence = np.NaN
+
+        return divergence
+
+    def iterdiff(self, feature, first_segments):
+
+        mat_dissimilarity = np.zeros(
+            (len(first_segments), len(first_segments))
+        )
+
+        for l, left in enumerate(first_segments):
+            for r, right in enumerate(first_segments):
+                if (left ^ right).duration < self.temporal_th:
+                    #print left, right
+                    mat_dissimilarity[l, r] = self.diff(left, right, feature)
+                else:
+                    mat_dissimilarity[l, r] = np.inf
+        X = scipy.spatial.distance.squareform(mat_dissimilarity)
+        Y = scipy.cluster.hierarchy.linkage(X, method='average')
+        T = scipy.cluster.hierarchy.fcluster(
+            Y, self.similarity_th, criterion='distance'
+        )
+        return T
+
+    def buld_nodes_edges(self, feature, first_segments):
+
+        T = self.iterdiff(feature, first_segments)
+        i = 0
+        G = nx.DiGraph()
+        n_nodes = []
+
+        while i < (len(T) - 1):
+            if T[i] - T[i + 1] != 0:
+                G.add_edge(T[i], T[i + 1])
+                n_nodes.append(i)
+            i += 1
+        return G, n_nodes, T
+
+    def cut_edges_detection(self, feature, first_segments):
+
+        #T = self.iterdiff(feature, first_segments)
+        G, n_nodes, T = self.buld_nodes_edges(feature, first_segments)
+
+        hyp = Timeline()
+        hypothesis = Timeline()
+        hyp.add(
+            Segment(first_segments[0].start, first_segments[n_nodes[0]].end)
+        )
+        for i, j in enumerate(n_nodes):
+            hyp.add(
+                Segment(
+                    first_segments[n_nodes[i - 1]].end,
+                    first_segments[n_nodes[i]].end
+                )
+            )
+            Coupure = nx.minimum_edge_cut(G, T[j + 1], T[j])
+            if len(Coupure) == 0:
+                hypothesis.add(hyp[i])
+
+        return hypothesis
+
+
+class SegmentationThematique(object):
     """docstring for SegmentationMamadou"""
     def __init__(
-        self, duration=1., step=0.1, gap=0., threshold=0.
+        self, duration=5., step=5, gap=0., threshold=240.,
+            n_components=1, covariance_type='diag', penality_coef=1.
     ):
-        super(SegmentationThematique, self).__init__(
-            duration=duration, step=step, gap=gap, threshold=threshold
-        )
+        super(SegmentationThematique, self).__init__()
+        self.duration = duration
+        self.step = duration
+        self.gap = gap
+        self.threshold = threshold
+        self.n_components = n_components
+        self.covariance_type = covariance_type
+        self.penality_coef = penality_coef
+
+    """stpe = duration pour empêcher les recouvrements et d'avoir une cohesion
+    sur un et un seul segment à chaque fois
+    """
 
     def apply(self, feature):
 
@@ -260,7 +356,6 @@ class SegmentationThematique(SlidingWindowsSegmentation):
         # TODO: find a way to set 'uri'
         return Timeline(segments=segments, uri=None)
 
-    
     def iterdiff(self, feature):
         """(middle, difference) generator
 
@@ -290,23 +385,16 @@ class SegmentationThematique(SlidingWindowsSegmentation):
             )
             middle = .5*(left.end + right.start)
 
-
             yield middle, self.diff(left, right, feature)
 
+    def sur_segmentation(self, feature):
 
-    def sur_segmentation(self, feature,duration):
-
-        # la longueur total du flux audio
         focus = feature.getExtent()
-        #start=focus.start
-        #print focus
 
         sliding_window = SlidingWindow(
             duration=self.duration,
             step=self.step,
             start=focus.start, end=focus.end)
-        #print sliding_window
-
 
         LEFT = []
         RIGHT = []
@@ -315,70 +403,165 @@ class SegmentationThematique(SlidingWindowsSegmentation):
                 start=left.end,
                 end=left.end + self.duration + self.gap
             )
-            # Pb:  left et right n'incremente pas !!!
-            # middle = .5*(left.end + right.start)
-            # LEFT = feature.crop(left)
-            # RIGHT = feature.crop(right)
-            # chaque intervalle contient 936 verctuers
-            # et chaque vecteur contient le 12 coef MCFF 
-            #    + 1 coef d'Egi
-            # print left, right
-
             LEFT.append(left)
             RIGHT.append(right)
-            #print left, right
 
-            yield LEFT, RIGHT
+        return LEFT, RIGHT
 
-            #yield middle, self.bic_cout(left, right, feature)
-           
-    
-    def apply_thematique(self, feature, duration, gamma, n_Gauss, threshold):
+    def apply_thematique(self, feature):
 
-        #x, y = zip(*[
-        #    (m, b) for m, b in self.sur_segmentation(feature)
-        #])
-        #x = np.array(x)
-        #y = np.array(y)
+        seg, _ = self.sur_segmentation(feature)
+        graph = nx.Graph()
+        graph.add_node(0, demand=1)
+        graph.add_node(len(seg), demand=-1)
 
-        
-        
-        for sgmtl, sgmtr in self.sur_segmentation(feature,duration):
-            left = sgmtl
-        seg = left
-       
-        mat=np.zeros((len(seg),len(seg)))
-        for i,l in enumerate(seg):
-            for j,r in enumerate(seg):
-                if j>=i and (l ^ r).duration < threshold:
-                    #c = l | r
-                    mat[i,j] = self.bic_criterium(feature, (l | r),gamma, n_Gauss)
+        for i, l in enumerate(seg):
+            for j, r in enumerate(seg):
+                if j >= i and (l ^ r).duration < self.threshold:
 
-        
-        return mat, seg
+                    cohesion = self.bic_criterium(feature, (l | r))
+                    graph.add_edge(i, j + 1, weight=abs(cohesion))
+                    "attenetion (i,j+1)= 1er segment ! "
 
-    def bic_criterium(self, feature, segment,gamma, n_components):
+        Chemin = nx.shortest_path(graph, 0, len(seg), weight='weight')
+        hypothesis = Timeline()
+        hypothesis.add(seg[-1])
+        for i in Chemin[:-1]:
+            hypothesis.add(seg[i])
 
-        # fait en sorte qu'il prend
-        # à l'entrée nbre de gaussiens
-        g = GMM(n_components=n_components)
-        #X = feature.crop(segment)
-        # g.fit(X)
+        return Chemin, hypothesis
 
-        # Reduction du nbre de point pour aug le tps de calcul
+    def bic_criterium(self, feature, segment):
+
+        g = GMM(
+            n_components=self.n_components, covariance_type=self.covariance_type
+        )
+
         X = feature.crop(segment)
-        # en prenant 1/10ieme des points
+     
         X_reduit = X[::10, :]
         g.fit(X_reduit)
-        # en prenant la mat de covariance
-        #g.fit(X)
-        #X_cov = np.round(g.means_, 4)
-        
-
-        #bicc = g.bic(X) + gamma * (g._n_parameters() * np.log(X.shape[0]))
 
         bicc = (-2 * g.score(X_reduit).sum() +
-                g._n_parameters() * gamma * np.log(X.shape[0]))
+                g._n_parameters() * self.penality_coef * np.log(X.shape[0]))
 
         return bicc
 
+    def log_multivariate_normal_density(self, X, means, covars):
+        """Compute Gaussian log-density at X for a diagonal model"""
+        n_samples, n_dim = X.shape
+        lpr = -0.5 * (n_dim * np.log(2 * np.pi) + np.sum(np.log(covars), 1) + np.sum((means ** 2) / covars, 1) - 2 * np.dot(X, (means / covars).T) + np.dot(X ** 2, (1.0 / covars).T))
+
+        return lpr
+
+    def score_sample_adaptative(self, X, gaussian_):
+
+        """ Return the per-sample likelihood of the data under the model.
+
+        Compute the log probability of X under the model and
+        return the posterior distribution (responsibilities) of each
+        mixture component for each element of X.
+
+        Parameters
+        ----------
+        X: array_like, shape (n_samples, n_features)
+        List of n_features-dimensional data points. Each row
+        corresponds to a single data point.
+
+        Returns
+        -------
+        logprob : array_like, shape (n_samples,)
+        Log probabilities of each data point in X.
+
+
+        """
+        X = np.asarray(X)
+        if X.ndim == 1:
+            X = X[:, np.newaxis]
+        if X.size == 0:
+            return np.array([]), np.empty((0, gaussian_.n_components))
+        if X.shape[1] != gaussian_.means_.shape[1]:
+            raise ValueError('The shape of X is not compatible with self')
+
+        lpr = self.log_multivariate_normal_density(
+            X, gaussian_.means_, gaussian_.covars_
+        )
+
+        logprob = logsumexp((lpr + np.log(gaussian_.weights_)), axis=1)
+
+        return logprob
+
+    # =====================================
+
+    def train_world_model(self, feature):
+
+        self._world_model = GMM(
+            n_components=self.n_components, covariance_type=self.covariance_type
+        )
+        self._world_model.fit(feature.data)
+
+    def segment_model(self, segment, feature):
+
+        """ return la gaussian adapetée au nouveau segment et
+        les features compris dans ce segment """
+
+        X = feature.crop(segment)
+        #g = self.gw.copy()
+
+        g = sklearn.clone(self._world_model)
+        # g.params = 'w'
+        g.n_iter = self._world_model .n_iter
+        g.n_init = 1
+        g.init_params = ''
+
+        g.weights_ = self._world_model .weights_
+        g.means_ = self._world_model .means_
+        g.covars_ = self._world_model .covars_
+        g.params = 'w'
+        g.fit(X)
+
+        return g, X
+
+    def build_graph(self, feature, segmentation):
+
+        self.train_world_model(feature)
+        _, responsibilities = self._world_model.score_samples(feature.data)
+        penality = self._world_model._n_parameters()
+
+        graph = nx.Graph()
+        graph.add_node(0, demand=1)
+        graph.add_node(len(segmentation), demand=-1)
+        """ matrice d'analyse des couts """
+        mat = np.zeros((len(segmentation), len(segmentation)))
+        for i, l in enumerate(segmentation):
+            for j, r in enumerate(segmentation):
+                if j >= i:
+                    if (l ^ r).duration < self.threshold:
+                        segment = l | r
+                        g, x = self.segment_model(segment, feature)
+                        logprob = self.score_sample_adaptative(x, g)
+
+                        k, n = feature.sliding_window.segmentToRange(segment)
+
+                        cohesion = (
+                            (-logprob).sum()
+                            + self.penality_coef * penality * np.log(n)
+                        )
+                        mat[i, j] = cohesion
+                        graph.add_edge(i, j + 1, weight=cohesion)
+                    else:
+                        graph.add_edge(i, j + 1, weight=np.inf)
+                        mat[i, j] = np.inf
+
+        Chemin = nx.shortest_path(graph, 0, len(segmentation), weight='weight')
+        hypothesis = Timeline()
+        hypothesis.add(segmentation[-1])
+        for i, l in enumerate(Chemin[:-2]):
+            hypothesis.add(Segment(
+                segmentation[l].start, segmentation[Chemin[i + 1]].start)
+            )
+        hypothesis.add(
+            Segment(segmentation[Chemin[i + 1]].start, segmentation[-1].start)
+        )
+
+        return Chemin, hypothesis, mat
