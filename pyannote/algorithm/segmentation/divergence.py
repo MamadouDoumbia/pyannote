@@ -544,7 +544,7 @@ class SegmentationThematique(object):
                         k, n = feature.sliding_window.segmentToRange(segment)
 
                         cohesion = (
-                            (-logprob).sum()
+                            -(logprob.sum())
                             + self.penality_coef * penality * np.log(n)
                         )
                         mat[i, j] = cohesion
