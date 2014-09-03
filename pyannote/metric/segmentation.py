@@ -99,7 +99,7 @@ class SegmentationCoverage(BaseMetric):
         string = ""
         string += "  - duration: %.2f seconds\n" % (detail[TOTAL])
         string += "  - correct: %.2f seconds\n" % (detail[INTER])
-        string += "  - %s: %.2f %%\n" % (self.name, 100*detail[self.name])
+        string += "  - %s: %.2f %%\n" % (self.name, 100 * detail[self.name])
         return string
 
 
@@ -163,28 +163,35 @@ class SegmentationPrecision(BaseMetric):
 
         N = len(reference) - 1
         M = len(hypothesis) - 1
-        refBoundaries = [segment.end for segment in reference][:-1]
-        hypBoundaries = [segment.end for segment in hypothesis][:-1]
-        delta = np.zeros((N, M))
-        for r, refBoundary in enumerate(refBoundaries):
-            for h, hypBoundary in enumerate(hypBoundaries):
-                delta[r, h] = abs(refBoundary - hypBoundary)
-        delta_max = np.amax(delta)
-        delta[np.where(delta > self.tolerance)] = np.inf
-        # print delta
-        h = np.amin(delta)
+        if N == 0.:
+            if M == 0.:
+                return 1.
+            else:
+                return 0.
+        else:
 
-        while h < delta_max:
-            k = np.argmin(delta)
-            i = k / M
-            j = k % M
-            delta[i, :] = np.inf
-            delta[:, j] = np.inf
-            nMatches += 1
+            refBoundaries = [segment.end for segment in reference][:-1]
+            hypBoundaries = [segment.end for segment in hypothesis][:-1]
+            delta = np.zeros((N, M))
+            for r, refBoundary in enumerate(refBoundaries):
+                for h, hypBoundary in enumerate(hypBoundaries):
+                    delta[r, h] = abs(refBoundary - hypBoundary)
+            delta_max = np.amax(delta)
+            delta[np.where(delta > self.tolerance)] = np.inf
+            # print delta
             h = np.amin(delta)
-        detail['Matches'] = nMatches
-        detail['Total'] = len(hypBoundaries)
-        return detail
+
+            while h < delta_max:
+                k = np.argmin(delta)
+                i = k / M
+                j = k % M
+                delta[i, :] = np.inf
+                delta[:, j] = np.inf
+                nMatches += 1
+                h = np.amin(delta)
+            detail['Matches'] = nMatches
+            detail['Total'] = len(hypBoundaries)
+            return detail
 
     def _get_rate(self, detail):
         return detail['Matches'] / detail['Total']

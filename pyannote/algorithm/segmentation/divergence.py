@@ -167,12 +167,7 @@ class SlidingWindowsSegmentation(object):
         maxima = scipy.signal.argrelmax(y)
         x = x[maxima]
         y = y[maxima]
-        return x, y
-
-    def get_maximaSTG(self, feature):
-        x = []
-        y = []
-        x = self.iterdiff_STG(feature)
+        print x, y
         return x, y
 
     def apply_threshold(self, feature, x, y):
@@ -189,6 +184,9 @@ class SlidingWindowsSegmentation(object):
 
         # create list of segments from boundaries
         segments = [Segment(*p) for p in pairwise(boundaries)]
+
+        print "plage de variation"
+        print extent
 
         # TODO: find a way to set 'uri'
         return Timeline(segments=segments, uri=None)
@@ -221,6 +219,11 @@ class SegmentationGaussianDivergence(SlidingWindowsSegmentation):
             divergence = np.NaN
 
         return divergence
+"""
+==================================================================
+            Méthode par Graphe de Transition
+==================================================================
+"""
 
 
 class TransitionGraphSegmentation(object):
@@ -242,15 +245,42 @@ class TransitionGraphSegmentation(object):
         gr = Gaussian(covariance_type='diag')
         Xr = feature.crop(right)
         gr.fit(Xr)
-
         try:
             divergence = gl.divergence(gr)
         except:
-            divergence = np.NaN
-
+            if np.size(gl.covar) != 0.:
+                divergence = 0.
+                # det(gl.covar)
+            else:
+                divergence = np.NaN
         return divergence
 
+    def sur_segmentation(self, feature):
+
+        """ Segmentation initiale à l'entrée du STG"""
+
+        focus = feature.getExtent()
+
+        sliding_window = SlidingWindow(
+            duration=self.duration,
+            step=self.duration,
+            start=focus.start, end=focus.end)
+
+        LEFT = []
+        RIGHT = []
+        for left in sliding_window:
+            right = Segment(
+                start=left.end,
+                end=left.end + self.duration
+            )
+            LEFT.append(left)
+            RIGHT.append(right)
+
+        return LEFT, RIGHT
+
     def iterdiff(self, feature, first_segments):
+
+        """Calcule de la matrice de similarité """
 
         mat_dissimilarity = np.zeros(
             (len(first_segments), len(first_segments))
@@ -268,9 +298,12 @@ class TransitionGraphSegmentation(object):
         T = scipy.cluster.hierarchy.fcluster(
             Y, self.similarity_th, criterion='distance'
         )
+        print T
         return T
 
-    def buld_nodes_edges(self, feature, first_segments):
+    def build_nodes_edges(self, feature, first_segments):
+
+        """Construction du graphe G"""
 
         T = self.iterdiff(feature, first_segments)
         i = 0
@@ -282,12 +315,15 @@ class TransitionGraphSegmentation(object):
                 G.add_edge(T[i], T[i + 1])
                 n_nodes.append(i)
             i += 1
+        print n_nodes
         return G, n_nodes, T
 
     def cut_edges_detection(self, feature, first_segments):
 
-        #T = self.iterdiff(feature, first_segments)
-        G, n_nodes, T = self.buld_nodes_edges(feature, first_segments)
+        """Recherche des arcs de coupure
+            first_segments: segmenation initiale"""
+
+        G, n_nodes, T = self.build_nodes_edges(feature, first_segments)
 
         hyp = Timeline()
         hypothesis = Timeline()
@@ -307,14 +343,22 @@ class TransitionGraphSegmentation(object):
 
         return hypothesis
 
+"""
+==================================================================
+            Méthode par Plus Court Chemin
+==================================================================
+"""
 
-class SegmentationThematique(object):
-    """docstring for SegmentationMamadou"""
+
+class PlusCourtChemin(object):
+
+    """ Rechecher de la segmentation la plus probable"""
+
     def __init__(
         self, duration=5., step=5, gap=0., threshold=240.,
             n_components=1, covariance_type='diag', penality_coef=1.
     ):
-        super(SegmentationThematique, self).__init__()
+        super(PlusCourtChemin, self).__init__()
         self.duration = duration
         self.step = duration
         self.gap = gap
@@ -323,7 +367,7 @@ class SegmentationThematique(object):
         self.covariance_type = covariance_type
         self.penality_coef = penality_coef
 
-    """stpe = duration pour empêcher les recouvrements et d'avoir une cohesion
+    """step = duration pour empêcher les recouvrements et d'avoir une cohesion
     sur un et un seul segment à chaque fois
     """
 
@@ -389,6 +433,8 @@ class SegmentationThematique(object):
 
     def sur_segmentation(self, feature):
 
+        """ Segmentation initiale à l'entrée du STG"""
+
         focus = feature.getExtent()
 
         sliding_window = SlidingWindow(
@@ -430,22 +476,6 @@ class SegmentationThematique(object):
             hypothesis.add(seg[i])
 
         return Chemin, hypothesis
-
-    def bic_criterium(self, feature, segment):
-
-        g = GMM(
-            n_components=self.n_components, covariance_type=self.covariance_type
-        )
-
-        X = feature.crop(segment)
-     
-        X_reduit = X[::10, :]
-        g.fit(X_reduit)
-
-        bicc = (-2 * g.score(X_reduit).sum() +
-                g._n_parameters() * self.penality_coef * np.log(X.shape[0]))
-
-        return bicc
 
     def log_multivariate_normal_density(self, X, means, covars):
         """Compute Gaussian log-density at X for a diagonal model"""
@@ -502,11 +532,11 @@ class SegmentationThematique(object):
 
     def segment_model(self, segment, feature):
 
-        """ return la gaussian adapetée au nouveau segment et
-        les features compris dans ce segment """
+        """ return la gaussian adapetée au nouveau segment
+        (adaptation des poids) """
 
         X = feature.crop(segment)
-        #g = self.gw.copy()
+        # g = self.gw.copy()
 
         g = sklearn.clone(self._world_model)
         # g.params = 'w'
@@ -522,38 +552,64 @@ class SegmentationThematique(object):
 
         return g, X
 
-    def build_graph(self, feature, segmentation):
+    def build_matrics(self, feature, segmentation):
+        """Calcul de la matrice de cohésion et les coefficients
+            de pénélyté"""
 
         self.train_world_model(feature)
         _, responsibilities = self._world_model.score_samples(feature.data)
         penality = self._world_model._n_parameters()
-
-        graph = nx.Graph()
-        graph.add_node(0, demand=1)
-        graph.add_node(len(segmentation), demand=-1)
+        print "calcul des matrices"
         """ matrice d'analyse des couts """
-        mat = np.zeros((len(segmentation), len(segmentation)))
+        mat_likelyhood = np.zeros((len(segmentation), len(segmentation)))
+        mat_penality = np.zeros((len(segmentation), len(segmentation)))
         for i, l in enumerate(segmentation):
             for j, r in enumerate(segmentation):
                 if j >= i:
                     if (l ^ r).duration < self.threshold:
                         segment = l | r
+                        print segment
                         g, x = self.segment_model(segment, feature)
                         logprob = self.score_sample_adaptative(x, g)
 
                         k, n = feature.sliding_window.segmentToRange(segment)
 
-                        cohesion = (
-                            -(logprob.sum())
-                            + self.penality_coef * penality * np.log(n)
-                        )
-                        mat[i, j] = cohesion
-                        graph.add_edge(i, j + 1, weight=cohesion)
-                    else:
-                        graph.add_edge(i, j + 1, weight=np.inf)
-                        mat[i, j] = np.inf
+                        ''' la matrice de visualisation des couts '''
+                        mat_likelyhood[i, j] = -(logprob.sum())
+                        print "j'ai calculé la matrice de vraisemblance"
+                        mat_penality[i, j] = penality * np.log(n)
+                        print "j'ai fini les calculs avec succès"
 
-        Chemin = nx.shortest_path(graph, 0, len(segmentation), weight='weight')
+        return mat_likelyhood, mat_penality
+
+    def build_graph2(self, mat_likelyhood, mat_penality):
+
+        """ matrice d'analyse des couts """
+        mat_likelyhood[np.where(mat_likelyhood == 0)] = np.inf
+        mat_penality[np.where(mat_penality == 0)] = np.inf
+
+        matrice_cout = np.zeros((len(mat_likelyhood), len(mat_likelyhood)))
+        matrice_cout = (mat_likelyhood + (self.penality_coef * mat_penality))
+
+        matrice_cout = matrice_cout + 2 * abs(np.amin(matrice_cout))
+
+        Graph = nx.DiGraph()
+        Graph.add_node(0)
+        Graph.add_node(len(matrice_cout))
+
+        for i in range(len(matrice_cout)):
+            for j in range(len(matrice_cout)):
+                Graph.add_edge(i, j + 1, weight=matrice_cout[i, j])
+
+        Chemin = nx.shortest_path(Graph, 0, len(matrice_cout), weight='weight')
+        nbre_segment = len(Chemin)
+        print nbre_segment
+
+        return Chemin
+
+    def apply_gtg(self, mat_likelyhood, mat_penality, segmentation):
+        Chemin = self.build_graph2(mat_likelyhood, mat_penality)
+        print "je calcul l'hypothesis"
         hypothesis = Timeline()
         hypothesis.add(segmentation[-1])
         for i, l in enumerate(Chemin[:-2]):
@@ -564,4 +620,4 @@ class SegmentationThematique(object):
             Segment(segmentation[Chemin[i + 1]].start, segmentation[-1].start)
         )
 
-        return Chemin, hypothesis, mat
+        return Chemin, hypothesis

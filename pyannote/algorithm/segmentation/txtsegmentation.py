@@ -21,6 +21,12 @@ def pairwise(iterable):
     next(b, None)
     return itertools.izip(a, b)
 
+"""
+==================================================================
+            Méthode par Plus Court Chemin
+==================================================================
+"""
+
 
 class GraphGlobal(object):
     """docstring for SegmentationMamadou"""
@@ -41,12 +47,13 @@ class GraphGlobal(object):
 
     def sur_segmentation(self, feature):
 
-        focus = feature.getExtent()
+        # focus = feature.getExtent()
+        focus = feature[len(feature) - 1].end
 
         sliding_window = SlidingWindow(
             duration=self.duration,
             step=self.duration,
-            start=focus.start, end=focus.end)
+            start=0, end=focus)
 
         LEFT = []
         RIGHT = []
@@ -116,27 +123,6 @@ class GraphGlobal(object):
         segment_likelihood = sum(likelihood)
 
         return segment_likelihood
-
-    # def episode_penality(self, lines_sentence):
-
-    #     text = ""
-    #     for _, line in enumerate(lines_sentence[2:]):
-    #         text = str(text + " " + line[4])
-
-    #     total_words_epi = 0.
-    #     tokens = nltk.word_tokenize(text)
-    #     tags = nltk.pos_tag(tokens)
-
-    #     ''' si le mots est l'un des pos alors on ajoute
-        # au dictionnaire '''
-    #     for w, pos in tags:
-    #         if pos == 'NNS' or pos == 'NNP' or pos == 'NN' or pos == 'VBD' or pos == 'VBZ' or pos == 'VB' or pos == 'VBG' or pos == 'VBZ' or pos == 'JJ' or pos == 'JJR' or pos == 'JJS':
-    #             total_words_epi += 1
-
-    #     print total_words_epi
-    #     penality = np.log(total_words_epi)
-
-    #     return penality
 
     def episode_penality2(self, lines_sentence):
         lmtz = nltk.stem.wordnet.WordNetLemmatizer()
@@ -231,6 +217,12 @@ class GraphGlobal(object):
 
         return Chemin, hypothesis, mat
 
+"""
+==================================================================
+            Méthode par Fenêtre Glissante
+==================================================================
+"""
+
 
 class SlidingWindowsSegmentation(object):
     """
@@ -257,7 +249,7 @@ class SlidingWindowsSegmentation(object):
         self.gap = gap
         self.threshold = threshold
 
-    def corpus_extract(self, lines):
+    def features_extract(self, lines):
 
         '''f = codecs.open('/PATH2URI/uri.ctm', 'r', 'utf8')
             lines = [line.strip().split() for line in f.readlines()]
@@ -288,6 +280,7 @@ class SlidingWindowsSegmentation(object):
             tags = nltk.pos_tag(tokens)
             lemmas = self.clean(tags)
             corpus.append(lemmas)
+        print "j'ai extrais les mots et le segments"
 
         return segments, corpus
 
@@ -333,16 +326,18 @@ class SlidingWindowsSegmentation(object):
         TFIDF = tfidf.toarray()
         middle = []
 
-        for i in range(len(segments) - (self.duration + 1)):
+        for i in range(len(segments) - (int(self.duration) + 1)):
             sim = self.cos_diff(TFIDF[i], TFIDF[self.duration + i + 1])
             similarity.append(sim)
             middle.append(
-                np.mean([segments[i].start, + segments[self.duration + i + 1].end])
+                np.mean(
+                    [segments[i].start, + segments[self.duration + i + 1].end]
+                )
             )
 
         return middle, similarity
 
-    def apply(self, segments, corpus):
+    def apply_similarity(self, segments, corpus):
 
         x, y = self.iterdiff(segments, corpus)
         x = np.array(x)
@@ -361,8 +356,9 @@ class SlidingWindowsSegmentation(object):
         # create list of segments from boundaries
         segments = [Segment(*p) for p in pairwise(boundaries)]
 
-        # TODO: find a way to set 'uri'
-        return Timeline(segments=segments, uri=None), x, y
+        print len(segments)
+        print "j'ai fini le calcul"
+        return Timeline(segments=segments, uri=None)
 
 
 class SegmentationCosinusSimilarity(SlidingWindowsSegmentation):
@@ -385,3 +381,180 @@ class SegmentationCosinusSimilarity(SlidingWindowsSegmentation):
         similarity = 1 - cos
 
         return similarity
+
+        """
+        ==================================================================
+                    Méthode par Graphe de Transition
+        ==================================================================
+        """
+
+
+class StgSegmentation(object):
+
+    def __init__(
+        self, duration=20., similarity_th=5., temporal_th=120
+    ):
+        super(StgSegmentation, self).__init__()
+        self.duration = duration
+        self.similarity_th = similarity_th
+        self.temporal_th = temporal_th
+
+    def clean(self, tags):
+        lemmas = []
+        lmtz = nltk.stem.wordnet.WordNetLemmatizer()
+        keep = {'JJ': ADJ,'JJR': ADJ,'JJS': ADJ,'NN': NOUN,'NNP': NOUN,'NNPS': NOUN,'NNS': NOUN,'RB': ADV,'RBR': ADV,'RBS': ADV,'VB': VERB,'VBD': VERB,'VBG': VERB,'VBN': VERB,'VBP': VERB,'VBZ': VERB}
+
+        for w, pos in tags:
+            if pos == 'NNS' or pos == 'NNP' or pos == 'NN' or pos == 'VBD' or pos == 'VBZ' or pos == 'VB' or pos == 'VBG' or pos == 'VBZ' or pos=='JJ' or pos=='JJR' or pos == 'JJS':
+                l = lmtz.lemmatize(w.lower(), pos=keep[pos])
+                lemmas.append(l.lower())
+
+        return ' '.join(lemmas)
+
+    def cos_diff(self, left_TFIDF, right_TFIDF):
+
+        cos = cosine_similarity(left_TFIDF, right_TFIDF)[0][0]
+
+        if (sum(left_TFIDF) == 0 or sum(right_TFIDF) == 0):
+            cos = 1
+        similarity = 1 - cos
+
+        return similarity
+
+    def get_transciption(self, segments, features):
+
+        """ features: fichier ctm avec les 2ière lignes"""
+
+        transcripts = {}
+        for i in range(2, len(features)):
+            transcripts[float(features[i][2])] = features[i][4]
+
+        times = transcripts.keys()
+
+        return times, transcripts
+
+    def iterdiff(self, segments, features):
+
+        """
+            segments: la première segmentation à l'entrée du StgSegmentation
+            corpus: le fichier ctm
+            l: segment (left)
+            r: (right)
+
+
+            =======================================================
+            pour chaque segment "l" (plan en vidéo) de la segmentation à l'entrée
+            on cherche les segments "r" les similaire à celui-ci.
+            Donc je fait un fit du texte sur l ainsi que le segment de comparaison
+
+            Une fois les mots obtenus après pré-traitement je calcule la difference
+            cosinus puis cette valeur est stockée dans une matrice.
+
+            à l'aide de cette matrice je fais le regroupement hierarchique puis
+            le graphe est construit à la fin
+
+        """
+        text_l = ""
+        text_r = ""
+        corpus = []
+        """ matrice """
+        mat = np.zeros((len(segments), len(segments)))
+
+        times, transcripts = self.get_transciption(segments, features)
+        vectorizer = TfidfVectorizer(min_df=1)
+        for i, l in enumerate(segments):
+            for j, r in enumerate(segments):
+                    if (l | r).duration <= self.temporal_th and i != j:
+                        for k in range(0, len(times)):
+                            time = times[k]
+                            words = transcripts[time]
+                            if (time >= l.start and time <= l.end):
+                                text_l = text_l + " " + words
+                            if (time >= r.start and time <= r.end):
+                                text_r = text_r + " " + words
+
+                        tokens_l = nltk.word_tokenize(text_l)
+                        tags_l = nltk.pos_tag(tokens_l)
+                        lemmas_l = self.clean(tags_l)
+                        corpus.append(lemmas_l)
+                        tokens_r = nltk.word_tokenize(text_r)
+                        tags_r = nltk.pos_tag(tokens_r)
+                        lemmas_r = self.clean(tags_r)
+                        corpus.append(lemmas_r)
+
+                        #print l," ",r
+                        #print corpus
+                        #print lemmas
+                        text_l = ""
+                        text_r = ""
+
+                        if corpus != ['', ''] and lemmas_l != "!" and lemmas_r != "!" and lemmas_l != "'s" and lemmas_r != "'s":
+                            #print i,j,
+                            tfidf = vectorizer.fit_transform(corpus)
+                            TFIDF = tfidf.toarray()
+
+                            # mat[i, j] = self.cos_diff(TFIDF[0], TFIDF[1])
+                            mat[i, j] = 1.1 - cosine_similarity(TFIDF[0], TFIDF[1])[0][0]
+                        corpus = []
+                        TFIDF = []
+                    elif corpus == ["'s", ''] and lemmas_l == "'s" and lemmas_r == "'s":
+                        mat[i, j] = 1.
+                        " si pas de texte fichier vide on deside"
+                        "qu'ils sont similaire"
+                    elif i == j:
+                        mat[i, j] = 0.
+                    else:
+                        mat[i, j] = np.inf
+        "l'idéal serait de stocker la matrice similairité"
+        X = scipy.spatial.distance.squareform(mat)
+        Y = scipy.cluster.hierarchy.linkage(X, method='average')
+        T = scipy.cluster.hierarchy.fcluster(
+            Y, self.similarity_th, criterion='distance'
+        )
+        print "calcul de la matrice des couts terminé"
+        print T
+        return T
+
+    def build_nodes_edges(self, segments, feature):
+
+        print " construction des noeuds"
+        T = self.iterdiff(segments, feature)
+        i = 0
+        G = nx.DiGraph()
+        n_nodes = []
+
+        while i < (len(T) - 1):
+            if T[i] - T[i + 1] != 0:
+                G.add_edge(T[i], T[i + 1])
+                n_nodes.append(i)
+                print T[i], T[i + 1],
+            i += 1
+        print n_nodes
+        return G, n_nodes, T
+
+    def cut_edges_detection(self, segments, feature):
+
+        #T = self.iterdiff(feature, segments)
+        G, n_nodes, T = self.build_nodes_edges(segments, feature)
+
+        hyp = Timeline()
+        hypothesis = Timeline()
+        hyp.add(
+            Segment(segments[0].start, segments[n_nodes[0]].end)
+        )
+
+        hyp.add(
+            Segment(segments[0].start, segments[n_nodes[0]].end)
+        )
+        for i, j in enumerate(n_nodes):
+            hyp.add(
+                Segment(
+                    segments[n_nodes[i - 1]].end,
+                    segments[n_nodes[i]].end
+                )
+            )
+            Coupure = nx.minimum_edge_cut(G, T[j + 1], T[j])
+            if len(Coupure) == 0:
+                hypothesis.add(hyp[i])
+
+        return hypothesis

@@ -20,11 +20,20 @@
 
 
 from divergence import SegmentationGaussianDivergence
+from divergence import PlusCourtChemin
+from divergence import TransitionGraphSegmentation
 from hmm import SegmentationHMM
-
+from txtsegmentation import GraphGlobal
+from txtsegmentation import SegmentationCosinusSimilarity
+from txtsegmentation import StgSegmentation
 __all__ = [
     'SegmentationGaussianDivergence',
-    'SegmentationHMM'
+    'SegmentationHMM',
+    'PlusCourtChemin',
+    'TransitionGraphSegmentation',
+    'GraphGlobal',
+    'SegmentationCosinusSimilarity',
+    'StgSegmentation'
 ]
 
 if __name__ == "__main__":
